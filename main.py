@@ -1,9 +1,9 @@
 import sys
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QListWidget, QTextEdit, QTableWidget, QTableWidgetItem, QApplication
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QListWidget, QTextEdit, QTableWidget, QTableWidgetItem, QApplication,
 )
-
+from PySide6.QtGui import QIcon
 from helpers import login, addEmployee
 
 from qt_material import apply_stylesheet
@@ -14,6 +14,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, db_connector):
         super().__init__()
         self.setWindowTitle("DB Abfragen App")
+        self.setWindowIcon(QIcon("eggplant.png"))
         self.db_connector = db_connector
         self.setup_ui()
         self.load_views()
@@ -69,7 +70,7 @@ class MainWindow(QtWidgets.QMainWindow):
         result_layout.addWidget(self.result_table)
         result_panel.setLayout(result_layout)
         right_splitter.addWidget(result_panel)
-        right_splitter.setSizes([0, 350])
+        right_splitter.setSizes([150, 350])
         splitter.addWidget(right_splitter)
         splitter.setStretchFactor(1, 3)
 
