@@ -1,17 +1,16 @@
 import sys
-from PySide6 import QtCore
+from PySide6 import QtWidgets, QtCore
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QLabel, QVBoxLayout, QHBoxLayout,
-    QPushButton, QWidget, QMainWindow, QTableWidget, QTableWidgetItem,
-    QTextEdit, QMessageBox, QListWidget, QSplitter
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QListWidget, QTextEdit, QTableWidget, QTableWidgetItem, QApplication
 )
 
-from helpers import login
+from helpers import login, addEmployee
 
 from qt_material import apply_stylesheet
 
 
-class MainWindow(QMainWindow):
+# Änderungen im MainWindow (nur der relevante Code)
+class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, db_connector):
         super().__init__()
         self.setWindowTitle("DB Abfragen App")
@@ -21,52 +20,68 @@ class MainWindow(QMainWindow):
         self.load_user_roles()
 
     def setup_ui(self):
-        central_widget = QWidget()
+        central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout()
+        main_layout = QtWidgets.QVBoxLayout(central_widget)
 
-        # Header: Anzeige der Benutzerrolle oben rechts
-        header_layout = QHBoxLayout()
+        # Header als eigenes Widget mit fester Höhe
+        header_widget = QtWidgets.QWidget()
+        header_widget.setFixedHeight(40)
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(5, 5, 5, 5)
         header_layout.addStretch()
+
         self.role_label = QLabel("Rolle(n): Unbekannt")
         header_layout.addWidget(self.role_label)
-        main_layout.addLayout(header_layout)
 
-        # Splitter: Links Views-Liste, rechts Abfrage- und Ergebnisbereich
-        splitter = QSplitter(QtCore.Qt.Horizontal)
+        # Button "Mitarbeiter hinzufügen" – standardmäßig verborgen
+        self.add_employee_button = QPushButton("Mitarbeiter hinzufügen")
+        self.add_employee_button.setVisible(False)
+        self.add_employee_button.clicked.connect(self.open_add_employee_dialog)
+        header_layout.addWidget(self.add_employee_button)
 
-        # Links: Liste der verfügbaren Views
+        main_layout.addWidget(header_widget)
+
+        # Horizontaler Splitter: Links Views-Liste, rechts Abfrage- und Ergebnisbereich
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+
         self.views_list = QListWidget()
-        # Hier wird nun auf itemClicked reagiert, sodass die View direkt ausgeführt wird
         self.views_list.itemClicked.connect(self.view_selected)
         splitter.addWidget(self.views_list)
 
-        # Rechts: Abfrageeingabe und Ergebnisanzeige
-        query_widget = QWidget()
-        query_layout = QVBoxLayout()
-
+        # Rechter Bereich: Vertikaler Splitter zwischen Abfrageeingabe und Ergebnistabelle
+        right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        query_panel = QtWidgets.QWidget()
+        query_layout = QtWidgets.QVBoxLayout(query_panel)
         self.info_label = QLabel("Geben Sie Ihre SQL-Abfrage ein:")
         query_layout.addWidget(self.info_label)
         self.query_text = QTextEdit()
         query_layout.addWidget(self.query_text)
-
         self.execute_button = QPushButton("Abfrage ausführen")
         self.execute_button.clicked.connect(self.run_query)
         query_layout.addWidget(self.execute_button)
+        query_panel.setLayout(query_layout)
+        right_splitter.addWidget(query_panel)
 
+        result_panel = QtWidgets.QWidget()
+        result_layout = QtWidgets.QVBoxLayout(result_panel)
         self.result_table = QTableWidget()
-        query_layout.addWidget(self.result_table)
-
-        query_widget.setLayout(query_layout)
-        splitter.addWidget(query_widget)
-        splitter.setStretchFactor(1, 3)  # Mehr Platz für den Abfragebereich
+        result_layout.addWidget(self.result_table)
+        result_panel.setLayout(result_layout)
+        right_splitter.addWidget(result_panel)
+        right_splitter.setSizes([0, 350])
+        splitter.addWidget(right_splitter)
+        splitter.setStretchFactor(1, 3)
 
         main_layout.addWidget(splitter)
-        central_widget.setLayout(main_layout)
+
+    def open_add_employee_dialog(self):
+        dialog = addEmployee.AddEmployeeDialog(self.db_connector, self)
+        dialog.exec()
 
     def view_selected(self, item):
         view_name = item.text()
-        # Automatische Abfrageausführung der angeklickten View
+        # Automatische Ausführung der View: SELECT * FROM <View>
         query = f"SELECT * FROM {view_name};"
         self.query_text.setText(query)
         self.run_query()
@@ -120,20 +135,21 @@ class MainWindow(QMainWindow):
             if results and len(results) > 0:
                 roles = [row[0] for row in results]
                 self.role_label.setText("Rolle(n): " + ", ".join(roles))
+                if "VERWALTUNG" in roles or "db_owner" in roles:
+                    self.add_employee_button.setVisible(True)
             else:
                 self.role_label.setText("Rolle(n): Keine")
         except Exception as e:
             QMessageBox.critical(self, "Fehler", f"Fehler beim Laden der Rollen: {e}")
 
-
 def main():
     app = QApplication(sys.argv)
     login_dialog = login.LoginDialog()
-    apply_stylesheet(login_dialog, 'light_blue.xml')
+    apply_stylesheet(login_dialog, 'light_blue.xml', invert_secondary=True)
     if login_dialog.exec() == QDialog.Accepted:
         db_connector = login_dialog.db_connector
         main_window = MainWindow(db_connector)
-        apply_stylesheet(main_window, 'light_blue.xml')
+        apply_stylesheet(main_window, 'light_blue.xml', invert_secondary=True)
         main_window.show()
         sys.exit(app.exec())
     else:
