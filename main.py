@@ -135,7 +135,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if results and len(results) > 0:
                 roles = [row[0] for row in results]
                 self.role_label.setText("Rolle(n): " + ", ".join(roles))
-                if "VERWALTUNG" in roles or "db_owner" in roles:
+                if "VERWALTUNG" in roles:
                     self.add_employee_button.setVisible(True)
             else:
                 self.role_label.setText("Rolle(n): Keine")
