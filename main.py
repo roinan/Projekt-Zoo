@@ -1,161 +1,335 @@
 import sys
-from PySide6 import QtWidgets, QtCore
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QListWidget, QTextEdit, QTableWidget, QTableWidgetItem, QApplication,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QLineEdit, QPushButton, QMessageBox, QListWidget,
+    QTextEdit, QTableWidget, QTableWidgetItem, QComboBox, QSplitter, QDialog
 )
 from PySide6.QtGui import QIcon
-from helpers import login, addEmployee
-
+from PySide6.QtCore import Qt
 from qt_material import apply_stylesheet
 
+import pyodbc
 
-# Änderungen im MainWindow (nur der relevante Code)
-class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, db_connector):
+
+class DatabaseConnector:
+    def __init__(self, driver, server, database, auth_type, username=None, password=None):
+        self.driver = driver
+        self.server = server
+        self.database = database
+        self.auth_type = auth_type
+        self.username = username
+        self.password = password
+        self.conn = None
+
+    def connect(self):
+        if self.auth_type == "Windows Authentication":
+            conn_str = (
+                f"DRIVER={{{self.driver}}};"
+                f"SERVER={self.server};"
+                f"DATABASE={self.database};"
+                "Trusted_Connection=yes;"
+            )
+        else:
+            conn_str = (
+                f"DRIVER={{{self.driver}}};"
+                f"SERVER={self.server};"
+                f"DATABASE={self.database};"
+                f"UID={self.username};"
+                f"PWD={self.password};"
+            )
+        self.conn = pyodbc.connect(conn_str)
+
+    def execute_query(self, query):
+        if self.conn is None:
+            raise Exception("Keine Verbindung zur Datenbank.")
+        cursor = self.conn.cursor()
+        cursor.execute(query)
+        if cursor.description:
+            columns = [col[0] for col in cursor.description]
+            data = cursor.fetchall()
+            return columns, data
+        self.conn.commit()
+        return None, None
+
+
+class LoginDialog(QDialog):
+    def __init__(self):
         super().__init__()
-        self.setWindowTitle("DB Abfragen App")
-        self.setWindowIcon(QIcon("eggplant.png"))
-        self.db_connector = db_connector
-        self.setup_ui()
-        self.load_views()
-        self.load_user_roles()
+        self.setWindowTitle("Verbindung zur Datenbank")
+        self.setMinimumWidth(300)
+        self.db_connector = None
+        self.init_ui()
 
-    def setup_ui(self):
-        central_widget = QtWidgets.QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QtWidgets.QVBoxLayout(central_widget)
+    def init_ui(self):
+        layout = QVBoxLayout(self)
 
-        # Header als eigenes Widget mit fester Höhe
-        header_widget = QtWidgets.QWidget()
-        header_widget.setFixedHeight(40)
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(5, 5, 5, 5)
-        header_layout.addStretch()
+        layout.addWidget(QLabel("Server:"))
+        self.server_input = QLineEdit("(localdb)\\mssqllocaldb")
+        layout.addWidget(self.server_input)
 
-        self.role_label = QLabel("Rolle(n): Unbekannt")
-        header_layout.addWidget(self.role_label)
+        layout.addWidget(QLabel("Datenbank:"))
+        self.db_input = QLineEdit("ZOO_DB")
+        layout.addWidget(self.db_input)
 
-        # Button "Mitarbeiter hinzufügen" – standardmäßig verborgen
-        self.add_employee_button = QPushButton("Mitarbeiter hinzufügen")
-        self.add_employee_button.setVisible(False)
-        self.add_employee_button.clicked.connect(self.open_add_employee_dialog)
-        header_layout.addWidget(self.add_employee_button)
+        layout.addWidget(QLabel("Authentifizierung:"))
+        self.auth_combo = QComboBox()
+        self.auth_combo.addItems(["Windows Authentication", "SQL Server Authentication"])
+        self.auth_combo.currentTextChanged.connect(self.toggle_auth_fields)
+        layout.addWidget(self.auth_combo)
 
-        main_layout.addWidget(header_widget)
+        self.user_input = QLineEdit()
+        self.pass_input = QLineEdit()
+        self.pass_input.setEchoMode(QLineEdit.Password)
+        layout.addWidget(QLabel("Benutzername:"))
+        layout.addWidget(self.user_input)
+        layout.addWidget(QLabel("Passwort:"))
+        layout.addWidget(self.pass_input)
 
-        # Horizontaler Splitter: Links Views-Liste, rechts Abfrage- und Ergebnisbereich
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.toggle_auth_fields(self.auth_combo.currentText())
 
-        self.views_list = QListWidget()
-        self.views_list.itemClicked.connect(self.view_selected)
-        splitter.addWidget(self.views_list)
+        connect_btn = QPushButton("Verbinden")
+        connect_btn.clicked.connect(self.try_connect)
+        layout.addWidget(connect_btn)
 
-        # Rechter Bereich: Vertikaler Splitter zwischen Abfrageeingabe und Ergebnistabelle
-        right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        query_panel = QtWidgets.QWidget()
-        query_layout = QtWidgets.QVBoxLayout(query_panel)
-        self.info_label = QLabel("Geben Sie Ihre SQL-Abfrage ein:")
-        query_layout.addWidget(self.info_label)
-        self.query_text = QTextEdit()
-        query_layout.addWidget(self.query_text)
-        self.execute_button = QPushButton("Abfrage ausführen")
-        self.execute_button.clicked.connect(self.run_query)
-        query_layout.addWidget(self.execute_button)
-        query_panel.setLayout(query_layout)
-        right_splitter.addWidget(query_panel)
+    def toggle_auth_fields(self, mode):
+        enable = mode == "SQL Server Authentication"
+        self.user_input.setEnabled(enable)
+        self.pass_input.setEnabled(enable)
 
-        result_panel = QtWidgets.QWidget()
-        result_layout = QtWidgets.QVBoxLayout(result_panel)
-        self.result_table = QTableWidget()
-        result_layout.addWidget(self.result_table)
-        result_panel.setLayout(result_layout)
-        right_splitter.addWidget(result_panel)
-        right_splitter.setSizes([150, 350])
-        splitter.addWidget(right_splitter)
-        splitter.setStretchFactor(1, 3)
+    def try_connect(self):
+        driver = "ODBC Driver 17 for SQL Server"
+        server = self.server_input.text().strip()
+        db = self.db_input.text().strip()
+        auth = self.auth_combo.currentText()
+        user = self.user_input.text().strip() if auth == "SQL Server Authentication" else None
+        pwd = self.pass_input.text() if auth == "SQL Server Authentication" else None
 
-        main_layout.addWidget(splitter)
-
-    def open_add_employee_dialog(self):
-        dialog = addEmployee.AddEmployeeDialog(self.db_connector, self)
-        dialog.exec()
-
-    def view_selected(self, item):
-        view_name = item.text()
-        # Automatische Ausführung der View: SELECT * FROM <View>
-        query = f"SELECT * FROM {view_name};"
-        self.query_text.setText(query)
-        self.run_query()
-
-    def run_query(self):
-        query = self.query_text.toPlainText().strip()
-        if not query:
-            QMessageBox.warning(self, "Fehler", "Bitte geben Sie eine SQL-Abfrage ein.")
-            return
+        self.db_connector = DatabaseConnector(driver, server, db, auth, user, pwd)
         try:
-            columns, results = self.db_connector.execute_query(query)
-            if columns and results is not None:
-                self.populate_table(columns, results)
-            else:
-                QMessageBox.information(self, "Erfolg", "Abfrage erfolgreich ausgeführt. Keine Ergebnisse zum Anzeigen.")
-                self.result_table.clear()
+            self.db_connector.connect()
+            self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Fehler", str(e))
 
-    def populate_table(self, columns, data):
+
+class AddEmployeeDialog(QDialog):
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Neuen Mitarbeiter eintragen")
+        self.setMinimumWidth(350)
+        self.db = db
+        self.init_ui()
+        self.load_departments()
+        self.load_activities()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+
+        self.department_combo = QComboBox()
+        self.department_combo.setEditable(True)
+        layout.addWidget(QLabel("Abteilung:"))
+        layout.addWidget(self.department_combo)
+
+        self.activity_combo = QComboBox()
+        self.activity_combo.setEditable(True)
+        layout.addWidget(QLabel("Tätigkeit:"))
+        layout.addWidget(self.activity_combo)
+
+        self.first_name = QLineEdit()
+        layout.addWidget(QLabel("Vorname:"))
+        layout.addWidget(self.first_name)
+
+        self.last_name = QLineEdit()
+        layout.addWidget(QLabel("Nachname:"))
+        layout.addWidget(self.last_name)
+
+        self.street = QLineEdit()
+        layout.addWidget(QLabel("Straße:"))
+        layout.addWidget(self.street)
+
+        self.zip_code = QLineEdit()
+        layout.addWidget(QLabel("PLZ:"))
+        layout.addWidget(self.zip_code)
+
+        self.city = QLineEdit()
+        layout.addWidget(QLabel("Ort:"))
+        layout.addWidget(self.city)
+
+        add_btn = QPushButton("Eintragen")
+        add_btn.clicked.connect(self.insert_employee)
+        layout.addWidget(add_btn)
+
+    def load_departments(self):
+        try:
+            _, result = self.db.execute_query("SELECT Abt_ID, Bezeichnung FROM Abteilung;")
+            self.department_combo.clear()
+            for id_, name in result:
+                self.department_combo.addItem(name, id_)
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
+
+    def load_activities(self):
+        try:
+            _, result = self.db.execute_query("SELECT Taetigkeiten_ID, Taetigkeiten_Name FROM Taetigkeiten;")
+            self.activity_combo.clear()
+            for id_, name in result:
+                self.activity_combo.addItem(name, id_)
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
+
+    def insert_employee(self):
+        dept = self.department_combo.currentData()
+        act = self.activity_combo.currentData()
+        fname = self.first_name.text().strip()
+        lname = self.last_name.text().strip()
+        street = self.street.text().strip()
+        zip_code = self.zip_code.text().strip()
+        city = self.city.text().strip()
+
+        if not fname or not lname:
+            QMessageBox.warning(self, "Pflichtfelder", "Vor- und Nachname sind erforderlich.")
+            return
+
+        query = """
+        INSERT INTO Mitarbeiter (Abt_NR, Name, Vorname, Strasse, PLZ, Ort, Taetigkeiten_ID)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
+        """
+        try:
+            cursor = self.db.conn.cursor()
+            cursor.execute(query, dept, lname, fname, street, zip_code, city, act)
+            self.db.conn.commit()
+            QMessageBox.information(self, "Erfolg", "Mitarbeiter hinzugefügt.")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, db):
+        super().__init__()
+        self.setWindowTitle("SQL Explorer")
+        self.setWindowIcon(QIcon("eggplant.png"))
+        self.db = db
+        self.init_ui()
+        self.populate_views()
+        self.display_roles()
+
+    def init_ui(self):
+        container = QWidget()
+        self.setCentralWidget(container)
+        layout = QVBoxLayout(container)
+
+        top_bar = QHBoxLayout()
+        self.role_display = QLabel("Rolle(n): ...")
+        self.add_button = QPushButton("+ Mitarbeiter")
+        self.add_button.setVisible(False)
+        self.add_button.clicked.connect(self.show_add_dialog)
+        top_bar.addStretch()
+        top_bar.addWidget(self.role_display)
+        top_bar.addWidget(self.add_button)
+        layout.addLayout(top_bar)
+
+        main_splitter = QSplitter(Qt.Horizontal)
+        self.view_list = QListWidget()
+        self.view_list.itemClicked.connect(self.load_view_query)
+        main_splitter.addWidget(self.view_list)
+
+        right_splitter = QSplitter(Qt.Vertical)
+
+        query_section = QWidget()
+        qlayout = QVBoxLayout(query_section)
+        qlayout.addWidget(QLabel("SQL-Abfrage:"))
+        self.query_input = QTextEdit()
+        qlayout.addWidget(self.query_input)
+        self.run_btn = QPushButton("Ausführen")
+        self.run_btn.clicked.connect(self.execute_sql)
+        qlayout.addWidget(self.run_btn)
+        right_splitter.addWidget(query_section)
+
+        result_section = QWidget()
+        rlayout = QVBoxLayout(result_section)
+        self.result_table = QTableWidget()
+        rlayout.addWidget(self.result_table)
+        right_splitter.addWidget(result_section)
+
+        main_splitter.addWidget(right_splitter)
+        main_splitter.setStretchFactor(1, 3)
+        layout.addWidget(main_splitter)
+
+    def show_add_dialog(self):
+        dialog = AddEmployeeDialog(self.db, self)
+        dialog.exec()
+
+    def load_view_query(self, item):
+        view = item.text()
+        self.query_input.setText(f"SELECT * FROM {view};")
+        self.execute_sql()
+
+    def execute_sql(self):
+        query = self.query_input.toPlainText().strip()
+        if not query:
+            QMessageBox.warning(self, "Hinweis", "Bitte geben Sie eine Abfrage ein.")
+            return
+        try:
+            columns, rows = self.db.execute_query(query)
+            self.display_results(columns, rows)
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
+
+    def display_results(self, headers, data):
         self.result_table.clear()
-        self.result_table.setColumnCount(len(columns))
+        if not headers:
+            QMessageBox.information(self, "OK", "Abfrage erfolgreich. Keine Daten.")
+            return
+        self.result_table.setColumnCount(len(headers))
         self.result_table.setRowCount(len(data))
-        self.result_table.setHorizontalHeaderLabels(columns)
-        for row_idx, row in enumerate(data):
-            for col_idx, cell in enumerate(row):
-                self.result_table.setItem(row_idx, col_idx, QTableWidgetItem(str(cell)))
+        self.result_table.setHorizontalHeaderLabels(headers)
+        for i, row in enumerate(data):
+            for j, val in enumerate(row):
+                self.result_table.setItem(i, j, QTableWidgetItem(str(val)))
         self.result_table.resizeColumnsToContents()
 
-    def load_views(self):
-        query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS;"
+    def populate_views(self):
         try:
-            columns, results = self.db_connector.execute_query(query)
-            if columns and results is not None:
-                self.views_list.clear()
-                for row in results:
-                    self.views_list.addItem(row[0])
+            c, v = self.db.execute_query("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS;")
+            self.view_list.clear()
+            for row in v:
+                self.view_list.addItem(row[0])
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Fehler beim Laden der Views: {e}")
+            QMessageBox.critical(self, "Fehler", str(e))
 
-    def load_user_roles(self):
+    def display_roles(self):
         query = """
-        SELECT dp.name AS DatabaseRole
+        SELECT dp.name
         FROM sys.database_role_members drm
         JOIN sys.database_principals dp ON drm.role_principal_id = dp.principal_id
         JOIN sys.database_principals up ON drm.member_principal_id = up.principal_id
         WHERE up.name = USER_NAME();
         """
         try:
-            columns, results = self.db_connector.execute_query(query)
-            if results and len(results) > 0:
-                roles = [row[0] for row in results]
-                self.role_label.setText("Rolle(n): " + ", ".join(roles))
-                if "VERWALTUNG" in roles:
-                    self.add_employee_button.setVisible(True)
+            _, roles = self.db.execute_query(query)
+            if roles:
+                role_names = [r[0] for r in roles]
+                self.role_display.setText("Rolle(n): " + ", ".join(role_names))
+                if "VERWALTUNG" in role_names:
+                    self.add_button.setVisible(True)
             else:
-                self.role_label.setText("Rolle(n): Keine")
+                self.role_display.setText("Rolle(n): Keine")
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Fehler beim Laden der Rollen: {e}")
+            QMessageBox.critical(self, "Fehler", str(e))
+
 
 def main():
     app = QApplication(sys.argv)
-    login_dialog = login.LoginDialog()
-    apply_stylesheet(login_dialog, 'light_blue.xml', invert_secondary=True)
-    if login_dialog.exec() == QDialog.Accepted:
-        db_connector = login_dialog.db_connector
-        main_window = MainWindow(db_connector)
-        apply_stylesheet(main_window, 'light_blue.xml', invert_secondary=True)
-        main_window.show()
+    dlg = LoginDialog()
+    apply_stylesheet(dlg, 'light_blue.xml', invert_secondary=True)
+    if dlg.exec() == QDialog.Accepted:
+        window = MainWindow(dlg.db_connector)
+        apply_stylesheet(window, 'light_blue.xml', invert_secondary=True)
+        window.show()
         sys.exit(app.exec())
-    else:
-        sys.exit(0)
+    sys.exit()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
