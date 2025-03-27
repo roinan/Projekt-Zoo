@@ -68,7 +68,7 @@ class LoginDialog(QDialog):
         layout.addWidget(self.server_input)
 
         layout.addWidget(QLabel("Datenbank:"))
-        self.db_input = QLineEdit("ZOO_DB")
+        self.db_input = QLineEdit("Zoo")
         layout.addWidget(self.db_input)
 
         layout.addWidget(QLabel("Authentifizierung:"))
